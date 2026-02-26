@@ -11,6 +11,8 @@ function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
+let lastGoodTimes = null;
+
 app.get("/times", async (req, res) => {
   try {
     const today = new Date();
@@ -33,6 +35,7 @@ app.get("/times", async (req, res) => {
     });
 
     if (!row) {
+      if (lastGoodTimes) return res.json(lastGoodTimes);
       return res.status(404).json({ error: "Today's row not found" });
     }
 
@@ -46,8 +49,12 @@ app.get("/times", async (req, res) => {
       isha: { adhan: $(tds[11]).text().trim(), iqamah: $(tds[12]).text().trim() }
     };
 
+    lastGoodTimes = result;
+
     res.json(result);
+
   } catch (err) {
+    if (lastGoodTimes) return res.json(lastGoodTimes);
     res.status(500).json({ error: err.message });
   }
 });
