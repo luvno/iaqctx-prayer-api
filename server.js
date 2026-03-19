@@ -41,17 +41,33 @@ app.get("/times", async (req, res) => {
 
     const tds = $(row).find("td");
 
-    const result = {
-      fajr: { adhan: $(tds[2]).text().trim(), iqamah: $(tds[3]).text().trim() },
-      dhuhr: { adhan: $(tds[5]).text().trim(), iqamah: $(tds[6]).text().trim() },
-      asr: { adhan: $(tds[7]).text().trim(), iqamah: $(tds[8]).text().trim() },
-      maghrib: { adhan: $(tds[9]).text().trim(), iqamah: $(tds[10]).text().trim() },
-      isha: { adhan: $(tds[11]).text().trim(), iqamah: $(tds[12]).text().trim() }
-    };
+const result = {
+  fajr: { adhan: $(tds[2]).text().trim(), iqamah: $(tds[3]).text().trim() },
+  dhuhr: { adhan: $(tds[5]).text().trim(), iqamah: $(tds[6]).text().trim() },
+  asr: { adhan: $(tds[7]).text().trim(), iqamah: $(tds[8]).text().trim() },
+  maghrib: { adhan: $(tds[9]).text().trim(), iqamah: $(tds[10]).text().trim() },
+  isha: { adhan: $(tds[11]).text().trim(), iqamah: $(tds[12]).text().trim() }
+};
 
-    lastGoodTimes = result;
+// scrape Jumu'ah times from below the table
+let jumuahTimes = [];
 
-    res.json(result);
+$("div").each((_, el) => {
+  const text = $(el).text();
+
+  if (text.includes("Jummah") || text.includes("Jumuah")) {
+    const matches = text.match(/\d{1,2}:\d{2}\s?(AM|PM)/g);
+    if (matches) {
+      jumuahTimes = matches;
+    }
+  }
+});
+
+result.jumuah = jumuahTimes;
+
+lastGoodTimes = result;
+
+res.json(result);
 
   } catch (err) {
     if (lastGoodTimes) return res.json(lastGoodTimes);
