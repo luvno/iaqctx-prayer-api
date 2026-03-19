@@ -2,7 +2,7 @@ import express from "express";
 import * as cheerio from "cheerio";
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 
 const WIDGET_URL = "https://widgets.connectmazjid.com/calendar?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NldFR5cGUiOiJzYWxhaCIsIm1hc2ppZElkIjoiNjhiZGYzYzZjYzJjZWI5MDIxOWZiMjRhIiwidXNlcklkIjoiNjQyZDgyOTU5YzUyNzIyOTA5N2RiMjI5In0.sRKpm_UtrRj_fE-UApLRta9XwLIm4VBViLWqVUtZXak&lat=33.054258&lon=-96.565045&entityType=MASJID";
@@ -57,6 +57,12 @@ app.get("/times", async (req, res) => {
     if (lastGoodTimes) return res.json(lastGoodTimes);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get("/events", async (req, res) => {
+  res.json({
+    message: "Events endpoint is working"
+  });
 });
 
 app.listen(PORT, () => {
