@@ -16,7 +16,7 @@ let lastGoodTimes = null;
 app.get("/times", async (req, res) => {
   try {
     const today = new Date();
-    const day = pad2(today.getDate());
+    const day = String(today.getDate());
 
     const response = await fetch(WIDGET_URL);
     const html = await response.text();
