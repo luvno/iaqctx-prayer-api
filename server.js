@@ -16,7 +16,7 @@ let lastGoodTimes = null;
 app.get("/times", async (req, res) => {
   try {
     const today = new Date();
-    const day = String(today.getDate());
+    const day = today.getDate();
 
     const response = await fetch(WIDGET_URL);
     const html = await response.text();
@@ -29,9 +29,9 @@ app.get("/times", async (req, res) => {
       if (!cells.length) return;
 
       const firstCell = $(cells[0]).text().trim();
-      if (firstCell === day) {
-        row = tr;
-      }
+if (parseInt(firstCell, 10) === day) {
+  row = tr;
+}
     });
 
     if (!row) {
