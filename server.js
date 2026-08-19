@@ -1,212 +1,117 @@
 import express from "express";
-import * as cheerio from "cheerio";
+import { pathToFileURL } from "node:url";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const TIME_ZONE = "America/Chicago";
+const CACHE_MS = 5 * 60 * 1000;
 
-// Monthly calendar widget (fallback source)
-const WIDGET_URL =
-  "https://widgets.connectmazjid.com/calendar?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NldFR5cGUiOiJzYWxhaCIsIm1hc2ppZElkIjoiNjhiZGYzYzZjYzJjZWI5MDIxOWZiMjRhIiwidXNlcklkIjoiNjQyZDgyOTU5YzUyNzIyOTA5N2RiMjI5In0.sRKpm_UtrRj_fE-UApLRta9XwLIm4VBViLWqVUtZXak&lat=33.054258&lon=-96.565045&entityType=MASJID";
+export const WEBSITE_URL = "https://iaqctx.org/prayer-times";
 
-// Daily live prayer widget (primary source)
-const DAILY_URL =
-  "https://widgets.connectmazjid.com/widget/prayer-timing?lat=33.054258&lon=-96.565045&token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhc3NldFR5cGUiOiJzYWxhaCIsIm1hc2ppZElkIjoiNjhiZGYzYzZjYzJjZWI5MDIxOWZiMjRhIiwidXNlcklkIjoiNjQyZDgyOTU5YzUyNzIyOTA5N2RiMjI5In0.sRKpm_UtrRj_fE-UApLRta9XwLIm4VBViLWqVUtZXak&entityType=MASJID";
+let cache = { data: null, date: null, fetchedAt: 0 };
 
-// Put your ScraperAPI key in Render environment variables as SCRAPERAPI_KEY
-const SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY;
-
-let lastGoodTimes = null;
-
-async function getDailyPrayerTimes() {
-  if (!SCRAPERAPI_KEY) {
-    throw new Error("SCRAPERAPI_KEY is missing");
-  }
-
-  const params = new URLSearchParams({
-    api_key: SCRAPERAPI_KEY,
-    url: DAILY_URL,
-    output_format: "json",
-    autoparse: "true",
-  });
-
-  const response = await fetch(`https://api.scraperapi.com/?${params.toString()}`);
-  if (!response.ok) {
-    throw new Error(`ScraperAPI request failed with status ${response.status}`);
-  }
-
-  const html = await response.text();
-
-  const prayerTimesIdx = html.indexOf('\\"prayerTimes\\"');
-  if (prayerTimesIdx === -1) {
-    throw new Error("prayerTimes not found in daily endpoint");
-  }
-
-  const startBracket = html.indexOf("[", prayerTimesIdx);
-  if (startBracket === -1) {
-    throw new Error("Opening bracket not found in daily endpoint");
-  }
-
-  let bracketCount = 0;
-  let jsonStr = "";
-
-  for (let i = startBracket; i < html.length; i++) {
-    if (html[i] === "[") bracketCount++;
-    else if (html[i] === "]") bracketCount--;
-
-    if (bracketCount === 0) {
-      jsonStr = html.slice(startBracket, i + 1);
-      break;
-    }
-  }
-
-  if (!jsonStr) {
-    throw new Error("Could not extract prayerTimes JSON");
-  }
-
-  jsonStr = jsonStr.replace(/\\"/g, '"');
-
-  let prayerTimes;
-  try {
-    prayerTimes = JSON.parse(jsonStr);
-  } catch (err) {
-    throw new Error(`Failed to parse daily prayerTimes JSON: ${err.message}`);
-  }
-
-  const result = {
-    source: "daily",
-  };
-
-  let jumuahTimes = [];
-
-  for (const prayer of prayerTimes) {
-    const name = prayer?.name;
-    const adhan = prayer?.azanTime || "";
-    const iqamah = prayer?.iqamaTime || "";
-
-    if (name === "Fajr") {
-      result.fajr = { adhan, iqamah };
-    } else if (name === "Dhuhr") {
-      result.dhuhr = { adhan, iqamah };
-    } else if (name === "Asr") {
-      result.asr = { adhan, iqamah };
-    } else if (name === "Maghrib") {
-      result.maghrib = { adhan, iqamah };
-    } else if (name === "Isha") {
-      result.isha = { adhan, iqamah };
-    } else if (name === "Jummah" || name === "Jumuah") {
-      if (adhan) jumuahTimes.push(adhan);
-      if (iqamah && iqamah !== adhan) jumuahTimes.push(iqamah);
-    }
-  }
-
-  result.jumuah = [...new Set(jumuahTimes)];
-
-  if (!result.fajr || !result.dhuhr || !result.asr || !result.maghrib || !result.isha) {
-    throw new Error("Missing one or more daily prayer times");
-  }
-
-  return result;
+function centralDateKey(now = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
 }
 
-async function getMonthlyFallbackTimes() {
-  const today = new Date();
-  const day = today.getDate();
-
-  const response = await fetch(WIDGET_URL);
-  if (!response.ok) {
-    throw new Error(`Monthly widget request failed with status ${response.status}`);
-  }
-
-  const html = await response.text();
-  const $ = cheerio.load(html);
-
-  let row;
-
-  $("table tr").each((_, tr) => {
-    const cells = $(tr).find("td");
-    if (!cells.length) return;
-
-    const firstCell = $(cells[0]).text().trim();
-    if (parseInt(firstCell, 10) === day) {
-      row = tr;
-    }
-  });
-
-  // If today's row is missing, use the last available row
-  if (!row) {
-    const allRows = $("table tr").filter((_, tr) => $(tr).find("td").length > 0);
-
-    if (allRows.length > 0) {
-      row = allRows.last();
-    } else {
-      throw new Error("No prayer rows found in monthly fallback");
-    }
-  }
-
-  const tds = $(row).find("td");
-  const returnedDate = $(tds[0]).text().trim();
-
-  const result = {
-    source: "monthly_fallback",
-    date: returnedDate,
-    fajr: { adhan: $(tds[2]).text().trim(), iqamah: $(tds[3]).text().trim() },
-    dhuhr: { adhan: $(tds[5]).text().trim(), iqamah: $(tds[6]).text().trim() },
-    asr: { adhan: $(tds[7]).text().trim(), iqamah: $(tds[8]).text().trim() },
-    maghrib: { adhan: $(tds[9]).text().trim(), iqamah: $(tds[10]).text().trim() },
-    isha: { adhan: $(tds[11]).text().trim(), iqamah: $(tds[12]).text().trim() },
-  };
-
-  let jumuahTimes = [];
-
-  $("div").each((_, el) => {
-    const text = $(el).text();
-
-    if (text.includes("Jummah") || text.includes("Jumuah")) {
-      const matches = text.match(/\d{1,2}:\d{2}\s?(AM|PM)/g);
-      if (matches) {
-        jumuahTimes = matches;
-      }
-    }
-  });
-
-  result.jumuah = [...new Set(jumuahTimes)];
-
-  return result;
+function decodeEmbeddedJson(text) {
+  return text.replace(/\\\\n/g, "\n").replace(/\\\\\"/g, '"');
 }
 
-app.get("/times", async (req, res) => {
-  try {
-    // Try daily source first
-    try {
-      const dailyResult = await getDailyPrayerTimes();
-      lastGoodTimes = dailyResult;
-      return res.json(dailyResult);
-    } catch (dailyErr) {
-      console.log("Daily source failed, falling back to monthly calendar:", dailyErr.message);
-    }
+export function parseWebsiteSchedule(html) {
+  const decoded = decodeEmbeddedJson(html);
+  const labels = /Faj(?:a|r)r?\s*\nDhuhr\s*\nAsr\s*\nMaghrib\s*\nIsha\s*\nJumuah 1\s*\nJumuah 2/i;
+  const labelsIndex = decoded.search(labels);
 
-    // Fallback to monthly calendar
-    const monthlyResult = await getMonthlyFallbackTimes();
-    lastGoodTimes = monthlyResult;
-    return res.json(monthlyResult);
-  } catch (err) {
-    if (lastGoodTimes) {
-      return res.json(lastGoodTimes);
+  if (labelsIndex === -1) {
+    throw new Error("IAQC prayer labels were not found");
+  }
+
+  const nearby = decoded.slice(Math.max(0, labelsIndex - 5000), labelsIndex);
+  const timeBlock = /((?:\d{1,2}:\d{2}\s*(?:AM|PM)\s*\n){7})/gi;
+  const matches = [...nearby.matchAll(timeBlock)];
+  const lastMatch = matches.at(-1);
+
+  if (!lastMatch) {
+    throw new Error("IAQC displayed prayer-time block was not found");
+  }
+
+  const times = lastMatch[1]
+    .trim()
+    .split(/\s*\n\s*/)
+    .map(normalizeTime);
+
+  if (times.length !== 7 || times.some((time) => !time)) {
+    throw new Error("IAQC displayed prayer-time block was incomplete");
+  }
+
+  return {
+    fajr: times[0],
+    dhuhr: times[1],
+    asr: times[2],
+    maghrib: times[3],
+    isha: times[4],
+    jumuah: times.slice(5, 7),
+  };
+}
+
+function normalizeTime(value = "") {
+  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return "";
+  return `${match[1].padStart(2, "0")}:${match[2]} ${match[3].toUpperCase()}`;
+}
+
+async function fetchText(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+  return response.text();
+}
+
+export async function getPrayerTimes(fetcher = fetchText) {
+  const websiteHtml = await fetcher(WEBSITE_URL);
+  const iqamah = parseWebsiteSchedule(websiteHtml);
+
+  return {
+    source: "iaqc_website",
+    date: centralDateKey(),
+    fajr: { adhan: "", iqamah: iqamah.fajr },
+    dhuhr: { adhan: "", iqamah: iqamah.dhuhr },
+    asr: { adhan: "", iqamah: iqamah.asr },
+    maghrib: { adhan: "", iqamah: iqamah.maghrib },
+    isha: { adhan: "", iqamah: iqamah.isha },
+    jumuah: iqamah.jumuah,
+  };
+}
+
+app.get("/times", async (_req, res) => {
+  const today = centralDateKey();
+  if (cache.data && cache.date === today && Date.now() - cache.fetchedAt < CACHE_MS) {
+    return res.json(cache.data);
+  }
+
+  try {
+    const data = await getPrayerTimes();
+    cache = { data, date: today, fetchedAt: Date.now() };
+    return res.json(data);
+  } catch (error) {
+    console.error("Prayer-time scrape failed:", error.message);
+    if (cache.data && cache.date === today) {
+      return res.json({ ...cache.data, stale: true });
     }
-    return res.status(500).json({ error: err.message });
+    return res.status(503).json({ error: "Today's prayer times are temporarily unavailable" });
   }
 });
 
-app.get("/events", async (req, res) => {
-  res.json({
-    message: "Events endpoint is working",
-  });
-});
+app.get("/events", (_req, res) => res.json({ message: "Events endpoint is working" }));
+app.get("/", (_req, res) => res.send("IAQC prayer API is running"));
 
-app.get("/", (req, res) => {
-  res.send("IAQC prayer API is running");
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+export { app, centralDateKey };
